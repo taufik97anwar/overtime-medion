@@ -54,6 +54,7 @@
                 auth, db, appId, collection, doc, addDoc, updateDoc, 
                 deleteDoc, onSnapshot, query, signInAnonymously, onAuthStateChanged 
             };
+            console.log("Firebase Terhubung!");
         } catch (e) {
             window.firebaseError = e.message;
         }
@@ -129,26 +130,27 @@
                 return () => unsubscribe();
             }, [fbReady]);
 
-            // Real-time Entries Listener
+            // Real-time Entries Listener (AMAT PENTING)
             useEffect(() => {
                 if (!user || !fbReady) return;
                 const { db, appId, collection, onSnapshot, query } = window.firebaseUtils;
                 
-                setDataStatus("Memuat riwayat...");
+                setDataStatus("Mencari data...");
                 const entriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'overtime_entries');
                 
                 const unsub = onSnapshot(query(entriesRef), (snapshot) => {
                     if (snapshot.empty) {
-                        setDataStatus("Belum ada data");
+                        setDataStatus("Database kosong");
                         setEntries([]);
                     } else {
                         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        console.log("Data diterima dari Cloud:", data.length);
                         setEntries(data.sort((a, b) => new Date(b.date) - new Date(a.date)));
-                        setDataStatus("Sinkron");
+                        setDataStatus("Sinkron (" + data.length + " data)");
                     }
                 }, (err) => {
                     console.error("Firestore sync error:", err);
-                    setDataStatus("Gagal sinkronisasi");
+                    setDataStatus("Akses Ditolak (Cek Rules)");
                 });
                 return () => unsub();
             }, [user, fbReady]);
@@ -160,7 +162,7 @@
 
             const handleLogin = (e) => {
                 e.preventDefault();
-                const found = HARDCODED_USERS.find(u => u.name === loginData.name);
+                const found = HARDCODED_USERS.find(u => u.name.toLowerCase() === loginData.name.toLowerCase());
                 if (found && found.password === loginData.password) {
                     setIsLoggedIn(true);
                     setCurrentUserProfile(found);
@@ -179,12 +181,16 @@
             };
 
             const isSupervisor = currentUserProfile?.role === 'supervisor';
+            
+            // Filter Data Berdasarkan User yang Login
             const displayedEntries = useMemo(() => {
                 if (!isLoggedIn || !currentUserProfile) return [];
-                return isSupervisor ? entries : entries.filter(e => e.technician === currentUserProfile.name);
+                if (isSupervisor) return entries; // Supervisor lihat semua
+                // Teknisi hanya lihat data dengan namanya sendiri
+                return entries.filter(e => e.technician === currentUserProfile.name);
             }, [isSupervisor, entries, currentUserProfile, isLoggedIn]);
 
-            const totalHours = displayedEntries.reduce((acc, curr) => acc + (curr.duration || 0), 0);
+            const totalHours = displayedEntries.reduce((acc, curr) => acc + (Number(curr.duration) || 0), 0);
             const totalDays = new Set(displayedEntries.map(e => e.date)).size;
 
             if (fbError) return (
@@ -266,12 +272,12 @@
 
                                 <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden text-slate-900">
                                     <div className="p-5 border-b border-slate-50 bg-slate-50/50 text-[9px] font-black uppercase text-slate-400 flex items-center justify-between tracking-widest">
-                                        <div className="flex items-center gap-2"><Icon name="list" className="w-3 h-3 text-blue-600" /> Aktivitas Cloud Terbaru</div>
+                                        <div className="flex items-center gap-2"><Icon name="list" className="w-3 h-3 text-blue-600" /> Data Cloud Terbaru</div>
                                         <span className="text-[8px] opacity-60 italic">{dataStatus}</span>
                                     </div>
                                     <div className="divide-y divide-slate-50">
                                         {displayedEntries.length === 0 ? (
-                                            <div className="p-16 text-center text-slate-300 font-bold uppercase text-[10px] tracking-widest italic opacity-50">Belum ada catatan di database</div>
+                                            <div className="p-16 text-center text-slate-300 font-bold uppercase text-[10px] tracking-widest italic opacity-50">Belum ada riwayat (Atau filter aktif)</div>
                                         ) : (
                                             displayedEntries.slice(0, 8).map(entry => (
                                                 <div key={entry.id} className="p-5 flex items-center justify-between hover:bg-slate-50/50 transition-all">
@@ -283,7 +289,7 @@
                                                         <div className="min-w-0">
                                                             <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
                                                                 {isSupervisor && <span className="text-[7px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-lg font-black uppercase tracking-tight">{entry.technician}</span>}
-                                                                <p className="font-black text-slate-800 text-sm tracking-tighter truncate">{entry.activity}</p>
+                                                                <p className="font-black text-slate-800 text-sm tracking-tighter truncate leading-tight">{entry.activity}</p>
                                                                 <span className={`text-[7px] px-2 py-1 rounded-full font-black uppercase shadow-sm ${entry.status === 'Diajukan' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}>
                                                                     {entry.status === 'Diajukan' ? <Icon name="check-circle" className="w-2.5 h-2.5" /> : null} {entry.status}
                                                                 </span>
@@ -295,7 +301,8 @@
                                                         {isSupervisor && entry.status === 'Draft' && (
                                                             <button onClick={async () => { 
                                                                 try {
-                                                                    await updateDoc(doc(window.firebaseUtils.db, 'artifacts', window.firebaseUtils.appId, 'public', 'data', 'overtime_entries', entry.id), { status: 'Diajukan' }); 
+                                                                    const { db, appId, updateDoc, doc } = window.firebaseUtils;
+                                                                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'overtime_entries', entry.id), { status: 'Diajukan' }); 
                                                                     notify("Berhasil diajukan!"); 
                                                                 } catch(e) { notify("Gagal update", "error"); }
                                                             }} className="bg-emerald-500 text-white p-2.5 rounded-xl shadow-lg active:scale-90 transition-all"><Icon name="send" className="w-3.5 h-3.5 text-white" /></button>
@@ -303,7 +310,8 @@
                                                         <button onClick={async () => { 
                                                             if(confirm("Hapus data dari cloud Medion?")) { 
                                                                 try {
-                                                                    await deleteDoc(doc(window.firebaseUtils.db, 'artifacts', window.firebaseUtils.appId, 'public', 'data', 'overtime_entries', entry.id)); 
+                                                                    const { db, appId, deleteDoc, doc } = window.firebaseUtils;
+                                                                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'overtime_entries', entry.id)); 
                                                                     notify("Dihapus!", "info"); 
                                                                 } catch(e) { notify("Gagal hapus", "error"); }
                                                             } 
@@ -324,7 +332,7 @@
                                         <span className="bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-black text-[8px] uppercase tracking-tighter">{displayedEntries.length} DATA</span>
                                     </div>
                                 </div>
-                                <div className="overflow-x-auto"><table className="w-full text-left min-w-[500px]"><thead className="bg-slate-50/50 text-slate-400 text-[8px] font-black uppercase tracking-widest"><tr><th className="px-8 py-5">Tanggal</th>{isSupervisor && <th className="px-8 py-5">Teknisi</th>}<th className="px-8 py-5">Pekerjaan</th><th className="px-8 py-5 text-center">Durasi</th><th className="px-8 py-5 text-center">Status</th><th className="px-8 py-5 w-24"></th></tr></thead><tbody className="divide-y divide-slate-50">{displayedEntries.length === 0 ? (<tr><td colSpan={6} className="px-8 py-10 text-center opacity-30 font-bold uppercase tracking-widest italic">Belum ada riwayat</td></tr>) : displayedEntries.map(entry => (<tr key={entry.id} className="hover:bg-slate-50 group transition-all"><td className="px-8 py-5 font-bold text-slate-700 whitespace-nowrap">{new Date(entry.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</td>{isSupervisor && <td className="px-8 py-5 text-[9px] font-black text-blue-600 uppercase tracking-tighter">{entry.technician}</td>}<td className="px-8 py-5 text-slate-500 italic max-w-[200px] truncate">{entry.activity}</td><td className="px-8 py-5 text-center font-black text-slate-800">{entry.duration}h</td><td className="px-8 py-5 text-center"><span className={`text-[8px] px-2 py-1 rounded-full font-black uppercase tracking-tight ${entry.status === 'Diajukan' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}>{entry.status}</span></td><td className="px-8 py-5 text-right whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all"><button onClick={async () => { if(confirm("Hapus data?")) { try { await deleteDoc(doc(window.firebaseUtils.db, 'artifacts', window.firebaseUtils.appId, 'public', 'data', 'overtime_entries', entry.id)); notify("Dihapus!", "info"); } catch(e) { notify("Gagal", "error"); } } }} className="text-red-400 p-2"><Icon name="trash-2" className="w-3.5 h-3.5" /></button></td></tr>))}</tbody></table></div>
+                                <div className="overflow-x-auto"><table className="w-full text-left min-w-[500px]"><thead className="bg-slate-50/50 text-slate-400 text-[8px] font-black uppercase tracking-widest"><tr><th className="px-8 py-5">Tanggal</th>{isSupervisor && <th className="px-8 py-5">Teknisi</th>}<th className="px-8 py-5">Pekerjaan</th><th className="px-8 py-5 text-center">Durasi</th><th className="px-8 py-5 text-center">Status</th><th className="px-8 py-5 w-24"></th></tr></thead><tbody className="divide-y divide-slate-50">{displayedEntries.length === 0 ? (<tr><td colSpan={6} className="px-8 py-10 text-center opacity-30 font-bold uppercase tracking-widest italic">Belum ada riwayat</td></tr>) : displayedEntries.map(entry => (<tr key={entry.id} className="hover:bg-slate-50 group transition-all text-slate-900"><td className="px-8 py-5 font-bold text-slate-700 whitespace-nowrap">{new Date(entry.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</td>{isSupervisor && <td className="px-8 py-5 text-[9px] font-black text-blue-600 uppercase tracking-tighter">{entry.technician}</td>}<td className="px-8 py-5 text-slate-500 italic max-w-[200px] truncate">{entry.activity}</td><td className="px-8 py-5 text-center font-black text-slate-800">{entry.duration}h</td><td className="px-8 py-5 text-center"><span className={`text-[8px] px-2 py-1 rounded-full font-black uppercase tracking-tight ${entry.status === 'Diajukan' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}>{entry.status}</span></td><td className="px-8 py-5 text-right whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all"><button onClick={async () => { if(confirm("Hapus data?")) { try { const { db, appId, deleteDoc, doc } = window.firebaseUtils; await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'overtime_entries', entry.id)); notify("Dihapus!", "info"); } catch(e) { notify("Gagal", "error"); } } }} className="text-red-400 p-2"><Icon name="trash-2" className="w-3.5 h-3.5" /></button></td></tr>))}</tbody></table></div>
                             </div>
                         )}
                     </main>
@@ -365,10 +373,10 @@
                                     }
                                 }} className="p-8 space-y-5">
                                     <div className="grid grid-cols-2 gap-4">
-                                        <div><label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1.5 ml-1">Tanggal</label><input type="date" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-xs font-bold outline-none focus:ring-2 focus:ring-blue-600" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} required /></div>
+                                        <div><label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1.5 ml-1">Tanggal</label><input type="date" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold outline-none focus:ring-2 focus:ring-blue-600 shadow-inner" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} required /></div>
                                         <div><label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1.5 ml-1">Teknisi</label>
                                             {isSupervisor ? (
-                                                <select className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-xs font-bold outline-none focus:ring-2 focus:ring-blue-600 appearance-none shadow-sm" value={formData.technician} onChange={e => setFormData({...formData, technician: e.target.value})} required>
+                                                <select className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold outline-none focus:ring-2 focus:ring-blue-600 appearance-none shadow-sm" value={formData.technician} onChange={e => setFormData({...formData, technician: e.target.value})} required>
                                                     <option value="">-- Pilih --</option>
                                                     {HARDCODED_USERS.filter(u => u.role === 'technician').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
                                                 </select>
